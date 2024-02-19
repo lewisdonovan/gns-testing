@@ -1,5 +1,5 @@
 import expect from 'expect.js'
-import gns from '../index.js'
+import gns from '../gns/index.js'
 
 test('Should have articles (without prettyURLs)', async () => {
   const articles = await gns({

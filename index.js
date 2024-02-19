@@ -1,115 +1,45 @@
-'use strict'
+const express = require('express');
+const cors = require('cors');
+const googleNewsScraper = require("./gns");
 
-const cheerio = require('cheerio');
-const getPrettyUrl = require('./getPrettyUrl').default;
-const buildQueryString = require('./buildQueryString').default;
-const getArticleContent = require('./getArticleContent').default;
+const app = express();
+app.use(cors());
 
-const googleNewsScraper = async (userConfig) => {
-
-  const config = Object.assign({
-    prettyURLs: true, 
-    getArticleContent: false, 
-    timeframe: "7d", 
-    puppeteerArgs: [], 
-    useLambdaLayer: false, 
-  }, userConfig);
-
-  const puppeteer = config.useLambdaLayer
-    ? require('chrome-aws-lambda').puppeteer
-    : require('puppeteer');
-
-  const queryString = config.queryVars ? buildQueryString(config.queryVars) : ''
-  const url = `https://news.google.com/search?${queryString}&q=${config.searchTerm} when:${config.timeframe || '7d'}`
-    console.log(`SCRAPING NEWS FROM: ${url}`);
-  const requiredArgs = [
-    '--disable-extensions-except=/path/to/manifest/folder/',
-    '--load-extension=/path/to/manifest/folder/',
-  ];
-  const puppeteerConfig = {
-    headless: true,
-    args: puppeteer.defaultArgs().concat(config.puppeteerArgs).filter(Boolean).concat(requiredArgs)
-  }
-  const browser = await puppeteer.launch(puppeteerConfig)
-  const page = await browser.newPage()
-  page.setViewport({ width: 1366, height: 768 })
-  page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36')
-  page.setRequestInterception(true)
-  page.on('request', request => {
-    if (!request.isNavigationRequest()) {
-      request.continue()
-      return
-    }
-    const headers = request.headers()
-    headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3'
-    headers['Accept-Encoding'] = 'gzip'
-    headers['Accept-Language'] = 'en-US,en;q=0.9,es;q=0.8'
-    headers['Upgrade-Insecure-Requests'] = 1
-    headers['Referer'] = 'https://www.google.com/'
-    request.continue({ headers })
-  })
-  await page.setCookie({
-    name: "CONSENT",
-    value: `YES+cb.${new Date().toISOString().split('T')[0].replace(/-/g,'')}-04-p0.en-GB+FX+667`,
-    domain: ".google.com"
-  });
-  await page.goto(url, { waitUntil: 'networkidle2' });
-
+app.get('/', async (req, res) => {
   try {
-    await page.$(`[aria-label="Reject all"]`);
-    await Promise.all([
-      page.click(`[aria-label="Reject all"]`), 
-      page.waitForNavigation({waitUntil: 'networkidle2'})
-    ]);
+    let timer = 0;
+    const interval = setInterval(() => {
+      timer++
+    }, 1);
+    const articles = await googleNewsScraper({
+      searchTerm: "Kim Kardashian",
+      prettyURLs: true,
+      getArticleContent: false, 
+      queryVars: {
+        hl:"en-US",
+        gl:"US",
+        ceid:"US:en"
+      },
+      timeframe: "5d",
+      puppeteerArgs: [
+        "--no-sandbox", 
+        "--disable-setuid-sandbox"
+      ], 
+      useLambdaLayer: true, 
+    });
+    clearInterval(interval);
+    res.json({
+      articles, timer
+    })
   } catch (err) {
-    // console.log("ERROR REJECTING COOKIES:", err);
+    res.json({error: err});
   }
+});
 
-  const content = await page.content();
-  const $ = cheerio.load(content);
+// Start the server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+});
 
-  const articles = $('article');
-  let results = []
-  let i = 0
-  const urlChecklist = []
-
-  $(articles).each(function() {
-    const link = $(this).find('a[href^="./article"]').attr('href').replace('./', 'https://news.google.com/') || false
-    link && urlChecklist.push(link);
-    const srcset = $(this).find('figure').find('img').attr('srcset')?.split(' ');
-    const image = srcset && srcset.length 
-      ? srcset[srcset.length-2] 
-      : $(this).find('figure').find('img').attr('src');
-    const mainArticle = {
-      "title": $(this).find('h4').text() || $(this).find('div > div + div > div a').text(),
-      "link": link,
-      "image": image?.startsWith("/") ? `https://news.google.com${image}` : image,
-      "source": $(this).find('div[data-n-tid]').text() || false,
-      "datetime": new Date($(this).find('div:last-child time').attr('datetime')) || false,
-      "time": $(this).find('div:last-child time').text() || false,
-    }
-    results.push(mainArticle)
-    i++
-  });
-
-  if (config.prettyURLs) {
-    results = await Promise.all(results.map(article => {
-      const url = getPrettyUrl(article.link);
-      article.link = url;
-      return article;
-    }));
-  }
-
-  if (config.getArticleContent) {
-    const filterWords = config.filterWords || [];
-    results = await getArticleContent(results, browser, filterWords);
-  }
-
-  await page.close();
-  await browser.close()
-
-  return results.filter(result => result.title)
-
-}
-
-module.exports = googleNewsScraper;
+module.exports = app;
