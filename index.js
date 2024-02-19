@@ -32,6 +32,7 @@ app.get('/', async (req, res) => {
       articles, timer
     })
   } catch (err) {
+    console.error(err);
     res.json({error: err});
   }
 });
