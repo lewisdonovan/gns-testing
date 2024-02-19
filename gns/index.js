@@ -1,5 +1,7 @@
 'use strict'
 
+const chromium = require('@sparticuz/chromium-min');
+const puppeteer = require('puppeteer-core')
 const cheerio = require('cheerio');
 const getPrettyUrl = require('./getPrettyUrl').default;
 const buildQueryString = require('./buildQueryString').default;
@@ -15,24 +17,32 @@ const googleNewsScraper = async (userConfig) => {
     useLambdaLayer: false, 
   }, userConfig);
 
-  const puppeteer = config.useLambdaLayer
-    ? require('chrome-aws-lambda').puppeteer
-    : require('puppeteer');
+  const isProd = process.env.NODE_ENV === 'production';
 
   const queryString = config.queryVars ? buildQueryString(config.queryVars) : ''
   const url = `https://news.google.com/search?${queryString}&q=${config.searchTerm} when:${config.timeframe || '7d'}`
     console.log(`SCRAPING NEWS FROM: ${url}`);
-  const requiredArgs = [
-    '--disable-extensions-except=/path/to/manifest/folder/',
-    '--load-extension=/path/to/manifest/folder/',
-  ];
-  const puppeteerConfig = {
-    headless: true,
-    args: puppeteer.defaultArgs().concat(config.puppeteerArgs).filter(Boolean).concat(requiredArgs)
-  }
-  const browser = await puppeteer.launch(puppeteerConfig)
+
+  const browser = isProd
+    ? await puppeteer.launch({
+      args: [...chromium.args.concat(config.puppeteerArgs).filter(Boolean), '--hide-scrollbars', '--disable-web-security'],
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(
+        `https://github.com/Sparticuz/chromium/releases/download/v116.0.0/chromium-v116.0.0-pack.tar`
+      ),
+      headless: 'new',
+      ignoreHTTPSErrors: true, 
+      ignoreDefaultArgs: ['--disable-extensions'], 
+    }) 
+    : await puppeteer.launch({
+      args: config.puppeteerArgs.filter(Boolean), 
+      headless: 'new',
+      executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', 
+      ignoreDefaultArgs: ['--disable-extensions'], 
+    });
+
   const page = await browser.newPage()
-  page.setViewport({ width: 1366, height: 768 })
+  // page.setViewport({ width: 1366, height: 768 })
   page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36')
   page.setRequestInterception(true)
   page.on('request', request => {
